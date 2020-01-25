@@ -1,9 +1,9 @@
-extern crate time_sys;
 extern crate chrono;
+extern crate time_sys;
 
-use std::time::SystemTime;
-use errno::{Errno, errno};
+use errno::{errno, Errno};
 use linux_api::time::timespec;
+use std::time::SystemTime;
 
 fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> Result<std::time::Duration, Errno> {
     let mut ts = timespec {
@@ -18,7 +18,10 @@ fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> Result<std::time::
     }
 
     if rc == 0 {
-        Ok(std::time::Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32))
+        Ok(std::time::Duration::new(
+            ts.tv_sec as u64,
+            ts.tv_nsec as u32,
+        ))
     } else {
         Err(errno())
     }
@@ -33,7 +36,9 @@ fn get_tai() -> Result<std::time::Duration, Errno> {
 }
 
 fn datetime(duration: &std::time::Duration) -> chrono::DateTime<chrono::offset::Utc> {
-    let system_time = SystemTime::UNIX_EPOCH.checked_add(duration.clone()).unwrap();
+    let system_time = SystemTime::UNIX_EPOCH
+        .checked_add(duration.clone())
+        .unwrap();
     chrono::DateTime::from(system_time)
 }
 
@@ -46,7 +51,15 @@ fn main() {
     let tai_chrono = datetime(&tai);
     let realtime_chrono = datetime(&rt);
 
-    println!("CLOCK_TAI:\t{:?}\t({})", &tai, &tai_chrono.format(DATE_FMT).to_string());
-    println!("CLOCK_REALTIME:\t{:?}\t({})", &rt, &realtime_chrono.format(DATE_FMT).to_string());
+    println!(
+        "CLOCK_TAI:\t{:?}\t({})",
+        &tai,
+        &tai_chrono.format(DATE_FMT).to_string()
+    );
+    println!(
+        "CLOCK_REALTIME:\t{:?}\t({})",
+        &rt,
+        &realtime_chrono.format(DATE_FMT).to_string()
+    );
     println!("Delta: {:?}", rt - tai);
 }
