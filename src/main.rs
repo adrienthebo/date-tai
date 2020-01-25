@@ -1,12 +1,11 @@
 extern crate time_sys;
-extern crate time;
 extern crate chrono;
 
 use std::time::SystemTime;
 use errno::{Errno, errno};
 use linux_api::time::timespec;
 
-fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> Result<time::Timespec, Errno> {
+fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> Result<std::time::Duration, Errno> {
     let mut ts = timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -19,40 +18,35 @@ fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> Result<time::Times
     }
 
     if rc == 0 {
-        Ok(time::Timespec { sec: ts.tv_sec, nsec: ts.tv_nsec as i32})
+        Ok(std::time::Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32))
     } else {
         Err(errno())
     }
 }
 
-fn get_realtime() -> Result<time::Timespec, Errno> {
+fn get_realtime() -> Result<std::time::Duration, Errno> {
     clock_gettime(linux_api::time::CLOCK_TAI)
 }
 
-fn get_tai() -> Result<time::Timespec, Errno> {
+fn get_tai() -> Result<std::time::Duration, Errno> {
     clock_gettime(linux_api::time::CLOCK_REALTIME)
 }
 
-fn chrono(ts: time::Timespec) -> chrono::DateTime<chrono::offset::Utc> {
-    let dur = time::Duration::nanoseconds(ts.nsec as i64) + time::Duration::seconds(ts.sec);
-    let system_time = SystemTime::UNIX_EPOCH.checked_add(dur.to_std().unwrap()).unwrap();
+fn datetime(duration: &std::time::Duration) -> chrono::DateTime<chrono::offset::Utc> {
+    let system_time = SystemTime::UNIX_EPOCH.checked_add(duration.clone()).unwrap();
     chrono::DateTime::from(system_time)
 }
 
+const DATE_FMT: &'static str = "%a %b %e %T.%f %Y";
+
 fn main() {
-    let tai_ts = get_tai();
-    let realtime_ts = get_realtime();
+    let tai = get_tai().expect("Unable to read CLOCK_TAI");
+    let rt = get_realtime().expect("Unable to read CLOCK_REALTIME");
 
-    let tai_chrono = tai_ts.clone().ok().map(|ts| chrono(ts));
-    let realtime_chrono = realtime_ts.clone().ok().map(|ts| chrono(ts));
+    let tai_chrono = datetime(&tai);
+    let realtime_chrono = datetime(&rt);
 
-
-
-    println!("CLOCK_TAI:\t{:?}\t({:?})", &tai_ts, &tai_chrono);
-    println!("CLOCK_REALTIME:\t{:?}\t({:?})", &realtime_ts, &realtime_chrono);
-
-    if let (Ok(r), Ok(t)) = (realtime_ts, tai_ts) {
-    let delta = r - t;
-        println!("Delta: {:?}", delta);
-    }
+    println!("CLOCK_TAI:\t{:?}\t({})", &tai, &tai_chrono.format(DATE_FMT).to_string());
+    println!("CLOCK_REALTIME:\t{:?}\t({})", &rt, &realtime_chrono.format(DATE_FMT).to_string());
+    println!("Delta: {:?}", rt - tai);
 }
