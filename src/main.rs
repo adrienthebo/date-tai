@@ -11,10 +11,9 @@ fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> Result<std::time::
         tv_nsec: 0,
     };
 
-    let tp = &mut ts;
     let rc;
     unsafe {
-        rc = time_sys::clock_gettime(clkid, tp);
+        rc = time_sys::clock_gettime(clkid, &mut ts);
     }
 
     if rc == 0 {
