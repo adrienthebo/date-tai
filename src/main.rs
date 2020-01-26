@@ -9,7 +9,7 @@ use linux_api::time::timespec;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-type TimeResult = Result<std::time::Duration, Errno>;
+type TimeResult = Result<Duration, Errno>;
 
 fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> TimeResult {
     let mut ts = timespec {
@@ -23,7 +23,7 @@ fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> TimeResult {
     }
 
     if rc == 0 {
-        Ok(std::time::Duration::new(
+        Ok(Duration::new(
             ts.tv_sec as u64,
             ts.tv_nsec as u32,
         ))
@@ -40,21 +40,42 @@ fn get_tai() -> TimeResult {
     clock_gettime(linux_api::time::CLOCK_REALTIME)
 }
 
-fn datetime(duration: &std::time::Duration) -> chrono::DateTime<chrono::offset::Utc> {
+fn datetime(duration: &Duration) -> chrono::DateTime<chrono::offset::Utc> {
     let system_time = SystemTime::UNIX_EPOCH
         .checked_add(duration.clone())
         .unwrap();
     chrono::DateTime::from(system_time)
 }
 
-fn measure_par<'a, F>(clocks: Vec<F>) -> Vec<std::time::Duration>
+#[allow(unused)]
+fn measure_ser<'a, F>(clocks: Vec<F>) -> Vec<Duration>
+where
+    F: Fn() -> TimeResult + Sync + Send + 'static,
+{
+    let mut results = Vec::with_capacity(clocks.len());
+
+    for clock in clocks {
+        results.push(clock().expect("Unable to to read clock"));
+    }
+    results
+}
+
+/// Measure the current time with a list of clocks, synchronized using a thread barrier.
+///
+/// The underlying library performing synchronization (`hurdles`) uses spinlocks that hint to the
+/// CPU that they're spinning, which introduces some latency into the barrier. This shows wider
+/// variance than sequential measurements but helps remove the systemic latency found with
+/// sequential operations.
+#[allow(unused)]
+fn measure_par<'a, F>(clocks: Vec<F>) -> Vec<Duration>
 where
     F: Fn() -> TimeResult + Sync + Send + 'static,
 {
     let barrier = Barrier::new(clocks.len());
     let mut receivers = Vec::with_capacity(clocks.len());
+
     for clock in clocks {
-        let (s, r) = oneshot::channel::<std::time::Duration>();
+        let (s, r) = oneshot::channel::<Duration>();
         receivers.push(r);
 
         let mut b = barrier.clone();
@@ -77,6 +98,7 @@ fn main() {
     let clocks: Vec<fn() -> TimeResult> = vec![get_tai, get_realtime];
 
     let results = measure_par(clocks.clone());
+    //let results = measure_ser(clocks.clone());
     let tai = results[0];
     let rt = results[1];
 
