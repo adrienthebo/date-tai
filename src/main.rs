@@ -2,10 +2,16 @@ extern crate chrono;
 extern crate time_sys;
 
 use errno::{errno, Errno};
+use futures::sync::oneshot;
+use futures::*;
+use hurdles::Barrier;
 use linux_api::time::timespec;
-use std::time::SystemTime;
+use std::thread;
+use std::time::{Duration, SystemTime};
 
-fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> Result<std::time::Duration, Errno> {
+type TimeResult = Result<std::time::Duration, Errno>;
+
+fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> TimeResult {
     let mut ts = timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -26,11 +32,11 @@ fn clock_gettime(clkid: linux_api::posix_types::clockid_t) -> Result<std::time::
     }
 }
 
-fn get_realtime() -> Result<std::time::Duration, Errno> {
+fn get_realtime() -> TimeResult {
     clock_gettime(linux_api::time::CLOCK_TAI)
 }
 
-fn get_tai() -> Result<std::time::Duration, Errno> {
+fn get_tai() -> TimeResult {
     clock_gettime(linux_api::time::CLOCK_REALTIME)
 }
 
@@ -41,11 +47,38 @@ fn datetime(duration: &std::time::Duration) -> chrono::DateTime<chrono::offset::
     chrono::DateTime::from(system_time)
 }
 
+fn measure_par<'a, F>(clocks: Vec<F>) -> Vec<std::time::Duration>
+where
+    F: Fn() -> TimeResult + Sync + Send + 'static,
+{
+    let barrier = Barrier::new(clocks.len());
+    let mut receivers = Vec::with_capacity(clocks.len());
+    for clock in clocks {
+        let (s, r) = oneshot::channel::<std::time::Duration>();
+        receivers.push(r);
+
+        let mut b = barrier.clone();
+        thread::spawn(move || {
+            b.wait();
+            s.send(clock().expect("Unable to read clock")).unwrap();
+        });
+    }
+
+    let results = receivers
+        .into_iter()
+        .map(|r| r.wait().unwrap())
+        .collect::<Vec<Duration>>();
+    results
+}
+
 const DATE_FMT: &'static str = "%a %b %e %T.%f %Y";
 
 fn main() {
-    let tai = get_tai().expect("Unable to read CLOCK_TAI");
-    let rt = get_realtime().expect("Unable to read CLOCK_REALTIME");
+    let clocks: Vec<fn() -> TimeResult> = vec![get_tai, get_realtime];
+
+    let results = measure_par(clocks.clone());
+    let tai = results[0];
+    let rt = results[1];
 
     let tai_chrono = datetime(&tai);
     let realtime_chrono = datetime(&rt);
@@ -60,5 +93,34 @@ fn main() {
         &rt,
         &realtime_chrono.format(DATE_FMT).to_string()
     );
-    println!("Delta: {:?}", rt - tai);
+
+    let delta: Duration;
+    let delta_sign: char;
+    if rt >= tai {
+        delta = rt - tai;
+        delta_sign = ' ';
+    } else {
+        delta = tai - rt;
+        delta_sign = '-';
+    }
+
+    let tai_offset = Duration::new(37, 0);
+    let tai_delta: Duration;
+    let tai_delta_sign: char;
+
+    if delta >= tai_offset {
+        tai_delta = delta - tai_offset;
+        tai_delta_sign = ' ';
+    } else {
+        tai_delta = tai_offset - delta;
+        tai_delta_sign = '-';
+    }
+
+    println!(
+        "Delta: {delta_sign}{delta:?} (Less RT/TAI offset: {tai_delta_sign}{tai_delta:?})",
+        delta_sign = delta_sign,
+        delta = delta,
+        tai_delta = tai_delta,
+        tai_delta_sign = tai_delta_sign
+    );
 }
